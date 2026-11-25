@@ -40,7 +40,7 @@ Adaptadores: `adapters/sqlite_repo.py` (SQLite WAL + `busy_timeout=30000` + FTS5
 
 ## Casos de uso (application/service.py)
 
-`init`, `migrate`, `fact-add` (con `--source-key`), `fact-search` (ranking híbrido FTS5 + confianza + decay temporal + uso, `--as-of`, `--touch`), `fact-supersede`, `session-start`, `session-summarize-add`, `archetype-list`, `instrument-add`, `instrument-harvest`, `skill-register`, `skill-sync` (solo lectura de `*/SKILL.md`), `link`, `relate` (con vigencia temporal), `relation-invalidate`, `neighbors` (`--as-of`), `context-pack` (presupuesto de tokens), `backup` (snapshot consistente con rotación), `export-json`, `import-json`, `doctor`, `stats`.
+`init`, `migrate`, `fact-add` (con `--source-key`), `fact-search` (ranking híbrido FTS5 + confianza + decay temporal + uso, `--as-of`, `--touch`), `fact-supersede`, `session-start`, `session-summarize-add`, `archetype-list`, `instrument-add`, `instrument-harvest`, `skill-register`, `skill-sync` (solo lectura de `*/SKILL.md`), `link`, `relate` (con vigencia temporal), `relation-invalidate`, `neighbors` (`--as-of`), `context-pack` (presupuesto de tokens; no incrementa `access_count` salvo `--touch`), `backup` (snapshot con rotación y campo `integrity`), `export-json`, `import-json`, `doctor`, `stats`.
 
 ## Fuera de alcance
 

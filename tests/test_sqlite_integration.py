@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -204,6 +205,10 @@ def test_skill_sync_readonly_and_context_pack(tmp_path):
     assert "Siempre verificar fuentes primarias" in pack["text"]
     assert "Sprint de pruebas en curso" in pack["text"]
     assert "Resumen inicial" in pack["text"]
+    assert pack["counts"]["matched_total"] >= 1
+    # Por defecto no incrementa access_count
+    rows = repo.db.execute("SELECT access_count FROM memory_facts").fetchall()
+    assert all(r["access_count"] == 0 for r in rows)
     repo.close()
 
 
@@ -218,7 +223,51 @@ def test_backup_and_rotation(tmp_path):
         res = s.backup(str(bdir), f"2026-11-25T10:00:{sec}Z", keep=2)
     assert len(list(bdir.glob("c9mem-*.sqlite"))) == 2
     assert len(res["removed"]) == 1
+    assert res["integrity"] == "ok"
     chk = sqlite3.connect(res["backup"])
     assert chk.execute("SELECT count(*) FROM memory_facts").fetchone()[0] == 1
     chk.close()
+    repo.close()
+
+
+
+def test_context_pack_default_does_not_touch_and_touch_once(tmp_path):
+    repo = SqliteMemoryRepository(tmp_path / "touch.sqlite", FixedClock())
+    s = MemoryService(repo)
+    s.init()
+    fid = s.add_fact(
+        type="workstream",
+        fact_text="Verificación de agente par en memoria compartida",
+        evidence_label="alta",
+        source_key="smoke:shared",
+    )
+    pack = s.context_pack("companion", budget_tokens=500, query="agente par")
+    acc = repo.db.execute("SELECT access_count FROM memory_facts WHERE id=?", (fid,)).fetchone()[0]
+    assert acc == 0
+    assert pack["counts"]["workstream"] == 1
+    assert pack["counts"]["match"] == 0
+    assert pack["counts"]["matched_total"] >= 1
+    assert pack["counts"]["dedup"] >= 1
+
+    pack2 = s.context_pack("companion", budget_tokens=500, query="agente par", touch=True)
+    acc = repo.db.execute("SELECT access_count FROM memory_facts WHERE id=?", (fid,)).fetchone()[0]
+    assert acc == 1
+    assert pack2["counts"]["dedup"] >= 1
+    repo.close()
+
+
+def test_backup_json_reports_integrity_error(tmp_path):
+    clk = FixedClock("2026-11-25T10:00:00Z")
+    repo = SqliteMemoryRepository(tmp_path / "live.sqlite", clk)
+    s = MemoryService(repo)
+    s.init()
+
+    def broken_backup(dest_path: str):
+        Path(dest_path).write_bytes(b"not-a-db")
+        return dest_path, "file is not a database"
+
+    repo.backup_to = broken_backup  # type: ignore[method-assign]
+    res = s.backup(str(tmp_path / "baks"), "2026-11-25T10:00:00Z", keep=2)
+    assert res["integrity"] == "file is not a database"
+    assert res["backup"].endswith("c9mem-20261125-100000Z.sqlite")
     repo.close()

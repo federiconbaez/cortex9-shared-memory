@@ -124,7 +124,11 @@ def _parser() -> argparse.ArgumentParser:
     cp.add_argument("--agent", default=os.environ.get("C9MEM_AGENT", "primary"))
     cp.add_argument("--budget", type=int, default=800)
     cp.add_argument("--query")
-    cp.add_argument("--no-touch", action="store_true")
+    cp.add_argument(
+        "--touch",
+        action="store_true",
+        help="incrementar access_count de los hechos incluidos (desactivado por defecto)",
+    )
     cp.add_argument("--json", action="store_true")
 
     bk = sub.add_parser("backup", help="snapshot consistente con rotación")
@@ -251,10 +255,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise DomainError(f"{a.entity_type} {a.entity} no existe")
             print(dumps(repo.neighbors(a.entity_type, eid, as_of=a.as_of, include_expired=a.all)))
         elif c == "context-pack":
-            pack = svc.context_pack(a.agent, a.budget, a.query, touch=not a.no_touch)
+            pack = svc.context_pack(a.agent, a.budget, a.query, touch=a.touch)
             print(dumps(pack) if a.json else pack["text"])
         elif c == "backup":
-            print(dumps(svc.backup(a.dir, repo.clock.now(), a.keep)))
+            result = svc.backup(a.dir, repo.clock.now(), a.keep)
+            print(dumps(result))
+            return 0 if result.get("integrity") == "ok" else 2
         elif c == "export-json":
             data = svc.export(repo.clock.now())
             if a.tables:

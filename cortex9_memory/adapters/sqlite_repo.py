@@ -534,15 +534,13 @@ class SqliteMemoryRepository:
                 counts[t] = n
         return counts
 
-    def backup_to(self, dest_path: str) -> str:
+    def backup_to(self, dest_path: str) -> tuple[str, str]:
         dst = Path(dest_path)
         dst.parent.mkdir(parents=True, exist_ok=True)
         out_conn = sqlite3.connect(str(dst), timeout=30)
         try:
             self.db.backup(out_conn)
-            ok = out_conn.execute("PRAGMA integrity_check").fetchone()[0]
-            if ok != "ok":
-                raise DomainError(f"backup falló integrity_check: {ok}")
+            integrity = out_conn.execute("PRAGMA integrity_check").fetchone()[0]
         finally:
             out_conn.close()
-        return str(dst)
+        return str(dst), str(integrity)

@@ -37,7 +37,9 @@ c9mem fact-search --as-of 2026-11-24T00:00:00Z    # qué era cierto en esa fecha
 c9mem fact-supersede 1 2                          # el 1 queda reemplazado por el 2 (no se borra)
 
 # Context Pack para inyectar en un prompt respetando presupuesto de tokens
+# Por defecto NO incrementa access_count. Usá --touch solo si querés registrar el uso.
 c9mem context-pack --agent primary --budget 600 --query "repo"
+c9mem context-pack --agent primary --budget 600 --query "repo" --touch
 
 # Sesiones y resúmenes
 S=$(c9mem session-start --channel chat --title "Investigación X")
@@ -62,6 +64,13 @@ c9mem doctor
 c9mem stats
 ```
 
+## Context pack: recencia y deduplicación
+
+`context-pack` arma un bloque compacto (reglas `behavior`, frentes `workstream`, hechos que coinciden con `--query`, resúmenes e instrumentos) y recorta al presupuesto de `--budget`.
+
+- **No toca `access_count` por defecto.** Solo `fact-search --touch` o `context-pack --touch` incrementan el uso, y en este último caso una sola vez por hecho realmente incluido (aunque el mismo id aparezca como workstream y como match).
+- En el JSON, `counts.match` son los hechos de la sección «Hechos relevantes» *después* de deduplicar contra secciones anteriores. `counts.matched_total` es cuántos hechos devolvió la búsqueda de `--query` y `counts.dedup` cuántos se omitieron por ya estar en `behavior` o `workstream`.
+
 ## Modelo y arquitectura
 
 `agents`, `sessions`, `message_summaries`, `memory_types` (`world` · `user_profile` · `behavior` · `workstream`), `memory_facts` (`+ memory_facts_fts`, `source_key` único parcial, `access_count`, `last_accessed_at`), `confidence_labels` (`alta` · `media` · `estimacion` · `no_encontrado`), `confidence_label_usage`, `archetypes`, `instruments`, `skills`, `skill_links`, `entity_relations` (bi-temporal: `valid_from`, `valid_until`), `schema_migrations`.
@@ -76,7 +85,7 @@ Arquitectura hexagonal: `domain/` (`models.py`, `ports.py`, `harvest.py`, `scori
 
 ## Backups y rotación (cron o vault)
 
-`c9mem backup --dir "$C9MEM_BACKUP_DIR" --keep 14` usa la API nativa `sqlite3.Connection.backup()` (segura con escrituras concurrentes en WAL), corre `PRAGMA integrity_check` sobre el snapshot y borra los más antiguos dejando `keep` copias.
+`c9mem backup --dir "$C9MEM_BACKUP_DIR" --keep 14` usa la API nativa `sqlite3.Connection.backup()` (segura con escrituras concurrentes en WAL), corre `PRAGMA integrity_check` sobre el snapshot y borra los más antiguos dejando `keep` copias. El JSON de salida incluye `"integrity": "ok"` (o el mensaje de error) y el comando sale con código 2 si el chequeo no es `ok`.
 
 Ejemplo para `cron` (diario a las 03:15 UTC) o paso previo a una sincronización de vault:
 

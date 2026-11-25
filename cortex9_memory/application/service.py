@@ -208,7 +208,7 @@ class MemoryService:
         agent: str,
         budget_tokens: int = 800,
         query: str | None = None,
-        touch: bool = True,
+        touch: bool = False,
     ) -> dict[str, Any]:
         if budget_tokens < 40:
             raise DomainError("budget_tokens debe ser >= 40")
@@ -223,10 +223,10 @@ class MemoryService:
                 i for i in instruments if ql in i["acronym"].lower() or ql in i["name"].lower() or ql in i["related_workstream"].lower()
             ]
         pack = pack_context(agent, budget_tokens, behaviors, workstreams, matches, summaries, instruments[:8])
-        if touch:
-            used_ids = [int(r["id"]) for r in (behaviors[: pack["counts"]["behavior"]] + workstreams[: pack["counts"]["workstream"]] + matches[: pack["counts"]["match"]])]
-            if used_ids:
-                self.repo.touch_facts(sorted(set(used_ids)))
+        # Por defecto no toca access_count. Con touch=True incrementa una sola vez
+        # por hecho realmente incluido (ya deduplicado en pack["fact_ids"]).
+        if touch and pack["fact_ids"]:
+            self.repo.touch_facts(pack["fact_ids"])
         return pack
 
     def backup(self, backup_dir: str, now_iso: str, keep: int = 14) -> dict[str, Any]:
@@ -236,14 +236,14 @@ class MemoryService:
         out_dir = Path(backup_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         dest = out_dir / f"c9mem-{stamp}.sqlite"
-        saved = self.repo.backup_to(str(dest))
+        saved, integrity = self.repo.backup_to(str(dest))
         snaps = sorted(out_dir.glob("c9mem-*.sqlite"))
         removed: list[str] = []
         while len(snaps) > keep:
             victim = snaps.pop(0)
             victim.unlink()
             removed.append(str(victim))
-        return {"backup": saved, "kept": len(snaps), "removed": removed}
+        return {"backup": saved, "kept": len(snaps), "removed": removed, "integrity": integrity}
 
     # portabilidad
     def export(self, now: str) -> dict[str, Any]:

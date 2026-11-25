@@ -59,7 +59,15 @@ def pack_context(
     header = f"# CONTEXT PACK (agent={agent}, budget={budget_tokens}t)\n"
     lines: list[str] = [header.rstrip("\n")]
     used = estimate_tokens(lines[0])
-    counts = {"behavior": 0, "workstream": 0, "match": 0, "summary": 0, "instrument": 0}
+    counts = {
+        "behavior": 0,
+        "workstream": 0,
+        "match": 0,
+        "matched_total": len(matches),
+        "dedup": 0,
+        "summary": 0,
+        "instrument": 0,
+    }
     seen_fact_ids: set[int] = set()
 
     def try_add_section(title: str, rows: list[str], key: str, ids: list[int] | None = None) -> None:
@@ -91,6 +99,7 @@ def pack_context(
         "behavior",
         [int(r["id"]) for r in behaviors],
     )
+    ws_dedup = sum(1 for r in workstreams if int(r["id"]) in seen_fact_ids)
     ws_filtered = [r for r in workstreams if int(r["id"]) not in seen_fact_ids]
     try_add_section(
         "Frentes activos (workstream)",
@@ -98,6 +107,8 @@ def pack_context(
         "workstream",
         [int(r["id"]) for r in ws_filtered],
     )
+    m_dedup = sum(1 for r in matches if int(r["id"]) in seen_fact_ids)
+    counts["dedup"] = ws_dedup + m_dedup
     m_filtered = [r for r in matches if int(r["id"]) not in seen_fact_ids]
     try_add_section(
         "Hechos relevantes",
@@ -122,5 +133,6 @@ def pack_context(
         "budget_tokens": budget_tokens,
         "tokens_est": estimate_tokens(text),
         "counts": counts,
+        "fact_ids": sorted(seen_fact_ids),
         "text": text,
     }

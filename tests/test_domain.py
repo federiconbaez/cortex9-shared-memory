@@ -131,3 +131,25 @@ def test_source_key_and_temporal_relation_validation():
         MemoryFact("world", "x", source_key="   ")
     with pytest.raises(DomainError):
         Relation("fact", 1, "r", "fact", 2, valid_from="2026-11-20T00:00:00Z", valid_until="2026-11-10T00:00:00Z")
+
+
+
+def test_pack_context_reports_dedup_and_matched_total():
+    from cortex9_memory.domain.scoring import pack_context
+
+    shared = {"id": 10, "type": "workstream", "evidence_label": "alta", "fact_text": "Frente Tween"}
+    other = {"id": 11, "type": "world", "evidence_label": "media", "fact_text": "Otro hecho Tween"}
+    pack = pack_context(
+        "companion",
+        800,
+        behaviors=[],
+        workstreams=[shared],
+        matches=[shared, other],
+        summaries=[],
+        instruments=[],
+    )
+    assert pack["counts"]["workstream"] == 1
+    assert pack["counts"]["match"] == 1
+    assert pack["counts"]["matched_total"] == 2
+    assert pack["counts"]["dedup"] == 1
+    assert pack["fact_ids"] == [10, 11]
