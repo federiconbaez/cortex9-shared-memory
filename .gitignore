@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+data/*.sqlite*
+exports/
+backups/
+TWEEN_FORGE_TEST.md

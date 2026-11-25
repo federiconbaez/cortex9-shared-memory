@@ -1,0 +1,36 @@
+[project]
+name = "cortex9-shared-memory"
+version = "0.2.0"
+description = "Almacén SQLite de memoria compartida (hechos, sesiones, arquetipos, instrumentos, skills, relaciones temporales) para bots y Grok"
+license = {text = "Apache-2.0"}
+authors = [{name = "Federico Nicolas Baez Rizzo"}]
+requires-python = ">=3.10"
+
+[project.scripts]
+c9mem = "cortex9_memory.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cortex9_memory*"]
+
+[tool.setuptools.package-data]
+"cortex9_memory.migrations" = ["*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true

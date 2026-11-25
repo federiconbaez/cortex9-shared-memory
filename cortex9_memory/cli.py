@@ -1,0 +1,277 @@
+"""CLI `c9mem`. DB por defecto: $C9MEM_DB o ./data/c9mem.sqlite"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from .adapters.sqlite_repo import SqliteMemoryRepository
+from .application.service import MemoryService, dumps
+from .domain.models import ENTITY_TYPES, MEMORY_TYPES, DomainError
+
+
+def default_db() -> str:
+    return os.environ.get("C9MEM_DB") or str(Path.cwd() / "data" / "c9mem.sqlite")
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="c9mem", description="Memoria compartida CORTEX-9 (SQLite)")
+    p.add_argument("--db", default=default_db())
+    p.add_argument("--agent", default=os.environ.get("C9MEM_AGENT"), help="nombre del agente que escribe")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    ini = sub.add_parser("init", help="migrar + seeds estructurales")
+    ini.add_argument("--workflows-dir", help="directorio opcional con */SKILL.md para sincronizar")
+    sub.add_parser("migrate", help="aplicar migraciones pendientes")
+    sub.add_parser("doctor", help="integridad, FKs, checksums, FTS, referencias colgantes")
+    sub.add_parser("stats", help="conteo por tabla")
+
+    f = sub.add_parser("fact-add")
+    f.add_argument("type", choices=MEMORY_TYPES)
+    f.add_argument("text")
+    f.add_argument("--confidence", type=float, help="0..1; si se omite se deriva de --label o 0.8")
+    f.add_argument("--label", choices=["alta", "media", "estimacion", "no_encontrado"])
+    f.add_argument("--meta", default="{}", help="JSON")
+    f.add_argument("--source", default="")
+    f.add_argument("--source-key", help="clave idempotente para upsert multi-agente")
+    f.add_argument("--valid-from")
+    f.add_argument("--valid-until")
+    f.add_argument("--session", type=int)
+
+    s = sub.add_parser("fact-search")
+    s.add_argument("query", nargs="?")
+    s.add_argument("--type", choices=MEMORY_TYPES)
+    s.add_argument("--all", action="store_true", help="incluir vencidos/supersedidos")
+    s.add_argument("--as-of", help="consulta puntual ISO-8601 (qué era cierto en esa fecha)")
+    s.add_argument("--touch", action="store_true", help="incrementar access_count de los resultados")
+    s.add_argument("--half-life", type=float, default=30.0, help="vida media en días para decay (default 30)")
+    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--json", action="store_true")
+
+    ss = sub.add_parser("fact-supersede")
+    ss.add_argument("old_id", type=int)
+    ss.add_argument("new_id", type=int)
+
+    se = sub.add_parser("session-start")
+    se.add_argument("--channel", default="chat")
+    se.add_argument("--title", default="")
+    se.add_argument("--summary", default="")
+
+    sm = sub.add_parser("session-summarize-add")
+    sm.add_argument("session_id", type=int)
+    sm.add_argument("turn_range", help="ej. t269u-t281u")
+    sm.add_argument("summary")
+    sm.add_argument("--tokens", type=int)
+
+    sub.add_parser("archetype-list")
+
+    ia = sub.add_parser("instrument-add")
+    ia.add_argument("acronym")
+    ia.add_argument("name")
+    ia.add_argument("definition")
+    ia.add_argument("--refutation", default="NO ENCONTRADO")
+    ia.add_argument("--kind", help="T/R/I/F (por defecto, la 1ª letra del acrónimo)")
+    ia.add_argument("--workstream", default="")
+    ia.add_argument("--source", default="")
+
+    ih = sub.add_parser("instrument-harvest", help="extraer (XXXX-FNBR) de un .md")
+    ih.add_argument("path")
+    ih.add_argument("--workstream", required=True)
+
+    il = sub.add_parser("instrument-list")
+    il.add_argument("--workstream")
+
+    sk = sub.add_parser("skill-register")
+    sk.add_argument("slug")
+    sk.add_argument("title")
+    sk.add_argument("path_or_body")
+    sk.add_argument("--version")
+    sk.add_argument("--portable-path", default="")
+
+    sy = sub.add_parser("skill-sync", help="ingesta en solo lectura de */SKILL.md")
+    sy.add_argument("--dir", default=os.environ.get("C9MEM_WORKFLOWS_DIR", ""))
+    sy.add_argument("--link-archetypes", action="store_true")
+
+    lk = sub.add_parser("link", help="vincular skill con entidad")
+    lk.add_argument("skill")
+    lk.add_argument("entity_type", choices=ENTITY_TYPES)
+    lk.add_argument("entity", help="id o clave natural (slug/acrónimo/nombre)")
+    lk.add_argument("--note", default="")
+
+    rl = sub.add_parser("relate")
+    rl.add_argument("from_type", choices=ENTITY_TYPES)
+    rl.add_argument("from_key")
+    rl.add_argument("relation")
+    rl.add_argument("to_type", choices=ENTITY_TYPES)
+    rl.add_argument("to_key")
+    rl.add_argument("--note", default="")
+    rl.add_argument("--valid-from")
+    rl.add_argument("--valid-until")
+
+    ri = sub.add_parser("relation-invalidate", help="cerrar vigencia temporal de una relación")
+    ri.add_argument("relation_id", type=int)
+    ri.add_argument("--until")
+
+    nb = sub.add_parser("neighbors")
+    nb.add_argument("entity_type", choices=ENTITY_TYPES)
+    nb.add_argument("entity")
+    nb.add_argument("--as-of", help="consulta puntual ISO-8601")
+    nb.add_argument("--all", action="store_true", help="incluir relaciones vencidas")
+
+    cp = sub.add_parser("context-pack", help="armar bloque compacto dentro de presupuesto de tokens")
+    cp.add_argument("--agent", default=os.environ.get("C9MEM_AGENT", "primary"))
+    cp.add_argument("--budget", type=int, default=800)
+    cp.add_argument("--query")
+    cp.add_argument("--no-touch", action="store_true")
+    cp.add_argument("--json", action="store_true")
+
+    bk = sub.add_parser("backup", help="snapshot consistente con rotación")
+    bk.add_argument("--dir", default=os.environ.get("C9MEM_BACKUP_DIR", "./backups"))
+    bk.add_argument("--keep", type=int, default=14)
+
+    ex = sub.add_parser("export-json")
+    ex.add_argument("--out", help="archivo; por defecto stdout")
+    ex.add_argument("--tables", help="lista separada por comas para un export parcial (p. ej. para Grok)")
+
+    im = sub.add_parser("import-json")
+    im.add_argument("path")
+    im.add_argument("--mode", choices=["merge", "replace"], default="merge")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    a = _parser().parse_args(argv)
+    repo = SqliteMemoryRepository(a.db)
+    svc = MemoryService(repo)
+    try:
+        if a.cmd not in ("init", "migrate"):
+            repo.migrate()
+        c = a.cmd
+        if c == "init":
+            print(dumps(svc.init(workflows_dir=a.workflows_dir)))
+        elif c == "migrate":
+            print(dumps({"applied": repo.migrate()}))
+        elif c == "doctor":
+            problems = repo.doctor()
+            print(dumps({"ok": not problems, "problems": problems, "tables": repo.table_names(), "db": a.db}))
+            return 0 if not problems else 2
+        elif c == "stats":
+            print(dumps(repo.stats()))
+        elif c == "fact-add":
+            fid = svc.add_fact(
+                type=a.type,
+                fact_text=a.text,
+                confidence=a.confidence,
+                evidence_label=a.label,
+                meta_json=a.meta,
+                source=a.source,
+                source_key=a.source_key,
+                valid_from=a.valid_from,
+                valid_until=a.valid_until,
+                agent=a.agent,
+                session_id=a.session,
+            )
+            print(fid)
+        elif c == "fact-search":
+            rows = svc.search(
+                a.query,
+                a.type,
+                a.all,
+                a.limit,
+                as_of=a.as_of,
+                touch=a.touch,
+                half_life_days=a.half_life,
+            )
+            if a.json:
+                print(dumps(rows))
+            else:
+                for r in rows:
+                    print(
+                        f"[{r['id']}] {r['type']} ({r['evidence_label']} {r['confidence']:.2f} s={r['score']:.2f}) "
+                        f"{r['fact_text']}" + (f"  — {r['source']}" if r["source"] else "")
+                    )
+        elif c == "fact-supersede":
+            svc.supersede(a.old_id, a.new_id)
+            print("ok")
+        elif c == "session-start":
+            print(svc.start_session(a.agent, a.channel, a.title, a.summary))
+        elif c == "session-summarize-add":
+            print(svc.add_summary(a.session_id, a.turn_range, a.summary, a.tokens, a.agent))
+        elif c == "archetype-list":
+            for r in repo.list_archetypes():
+                print(f"{r['slug']}: {r['name']} — {r['definition']}")
+        elif c == "instrument-add":
+            print(
+                svc.add_instrument(
+                    acronym=a.acronym,
+                    name=a.name,
+                    kind=a.kind or a.acronym[:1],
+                    definition=a.definition,
+                    refutation=a.refutation,
+                    related_workstream=a.workstream,
+                    source=a.source,
+                    agent=a.agent,
+                )
+            )
+        elif c == "instrument-harvest":
+            print(dumps(svc.harvest_instruments(a.path, a.workstream, a.agent)))
+        elif c == "instrument-list":
+            for r in repo.list_instruments(a.workstream):
+                print(f"{r['acronym']} [{r['related_workstream']}] {r['name']}")
+        elif c == "skill-register":
+            print(svc.register_skill(a.slug, a.title, a.path_or_body, a.version, a.portable_path))
+        elif c == "skill-sync":
+            if not a.dir:
+                raise DomainError("especificá --dir o C9MEM_WORKFLOWS_DIR")
+            print(dumps(svc.sync_skills(a.dir, link_archetypes=a.link_archetypes)))
+        elif c == "link":
+            print(svc.link(a.skill, a.entity_type, a.entity, a.note))
+        elif c == "relate":
+            print(
+                svc.relate(
+                    a.from_type,
+                    a.from_key,
+                    a.relation,
+                    a.to_type,
+                    a.to_key,
+                    a.note,
+                    a.agent,
+                    a.valid_from,
+                    a.valid_until,
+                )
+            )
+        elif c == "relation-invalidate":
+            svc.invalidate_relation(a.relation_id, a.until)
+            print("ok")
+        elif c == "neighbors":
+            eid = repo.find_id(a.entity_type, a.entity)
+            if eid is None:
+                raise DomainError(f"{a.entity_type} {a.entity} no existe")
+            print(dumps(repo.neighbors(a.entity_type, eid, as_of=a.as_of, include_expired=a.all)))
+        elif c == "context-pack":
+            pack = svc.context_pack(a.agent, a.budget, a.query, touch=not a.no_touch)
+            print(dumps(pack) if a.json else pack["text"])
+        elif c == "backup":
+            print(dumps(svc.backup(a.dir, repo.clock.now(), a.keep)))
+        elif c == "export-json":
+            data = svc.export(repo.clock.now())
+            if a.tables:
+                keep = {t.strip() for t in a.tables.split(",")}
+                data["tables"] = {k: v for k, v in data["tables"].items() if k in keep}
+            text = dumps(data)
+            if a.out:
+                Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+                Path(a.out).write_text(text, encoding="utf-8")
+                print(a.out)
+            else:
+                print(text)
+        elif c == "import-json":
+            print(dumps(svc.import_(json.loads(Path(a.path).read_text(encoding="utf-8")), a.mode)))
+        return 0
+    except DomainError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        repo.close()

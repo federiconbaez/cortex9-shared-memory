@@ -1,0 +1,25 @@
+{
+  "format": "cortex9-shared-memory/v1",
+  "tables": {
+    "memory_facts": [
+      {
+        "type": "behavior",
+        "fact_text": "Declarar NO ENCONTRADO cuando un dato no exista en fuente primaria.",
+        "confidence": 0.95,
+        "evidence_label": "alta",
+        "source": "ejemplo-seed",
+        "source_key": "example:behavior:no-encontrado",
+        "meta_json": "{}"
+      },
+      {
+        "type": "workstream",
+        "fact_text": "Ejemplo de frente de trabajo inicializado con c9mem.",
+        "confidence": 0.8,
+        "evidence_label": "media",
+        "source": "ejemplo-seed",
+        "source_key": "example:workstream:demo",
+        "meta_json": "{\"workstream\":\"demo\"}"
+      }
+    ]
+  }
+}
