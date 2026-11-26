@@ -48,3 +48,40 @@ Adaptadores: `adapters/sqlite_repo.py` (SQLite WAL + `busy_timeout=30000` + FTS5
 - Embeddings / búsqueda semántica (FTS5 léxico + decay temporal; un adaptador vectorial puede añadirse luego).
 - Concurrencia multi-host: es un archivo local con WAL; varios agentes en la misma máquina sí, varias máquinas compartiendo disco de red no.
 - Cifrado en reposo y secretos: **no guardar credenciales ni tokens** aquí.
+
+## v0.3 — Memoria operativa multi-bot (diseño `DISENO.md`, CX9-6207..6212)
+
+Objetivo: que varias bots en la misma máquina gasten menos contexto. Comparten **cápsulas por tarea**, un **log de eventos encadenado**, un **ledger de decisiones**, un **semáforo de consumo** y **handoffs por punteros**, en lugar de reenviar historial y pegar contenido.
+
+### Módulos de dominio (puros)
+
+| Módulo | Feature | Responsabilidad |
+|---|---|---|
+| `domain/taint.py` | F27, F23 | `TrustTier` (T0 externo … T3 usuario), detector determinista de inyección (Unicode oculto/bidi/tags, marcado falso de sistema, frases imperativas), propagación de taint y neutralización para contexto. |
+| `domain/capsules.py` | F08, F22, F26 | `Capsule` ≤ 450 tokens, render/parse canónico, parches con CAS sobre `rev`, reloj vectorial por agente, sello `sha256`, chequeo de staleness (TTL + hashes de punteros). |
+| `domain/budget.py` | F31, F29 | Semáforo 50/75/90 % con histéresis por ventana semanal, política por nivel, admisión de tareas por delta estimado, calibración `pct/token`. |
+| `domain/scoring.py` | F15, F17, F05, F38 | Mochila 0-1 bajo presupuesto, penalización MMR por similitud, dedup por hash normalizado, `pack_sha256` para replay. |
+| `domain/events.py` | F25, F21 | Eventos canónicos encadenados por `prev_sha256`, recuperación de cola rota, raíz Merkle, ledger de decisiones/contradicciones como CRDT LWW. |
+| `domain/handoff.py` | F06 | Sobre `handoff_v1`/`handoff_result_v1` por punteros `path#Lx-Ly@sha256` con tope de tokens. |
+| `domain/compression.py` | F02, F07, F35 | Codebook de alias sin pérdida, plegado de salidas de herramientas, sonda de fidelidad de resúmenes. |
+
+### Invariantes nuevas
+
+- **I-DOM** `domain/*` no importa `sqlite3`, `os`, `pathlib`, `subprocess`, `socket`, `urllib`, `fcntl`, `shutil`, ni llama `datetime.now`/`time.time`. El tiempo entra como ISO-8601 UTC. Lo verifica `tests/test_architecture.py`.
+- **I-TAINT** Un texto con veredicto `blocked` no se persiste. Un hecho `behavior` exige `trust_tier ≥ T2` y `tainted = false`. Lo derivado hereda el tier mínimo y el taint de sus insumos. La neutralización elimina caracteres invisibles y desarma marcado `<…>` de sistema antes de inyectar texto recuperado en un prompt.
+- **I-CAP** Una cápsula renderizada ocupa ≤ `budget_tokens` (450 por defecto), con ≤ 5 decisiones, ≤ 3 próximos pasos y ≤ 8 punteros. Si se excede, se rechaza antes de tocar disco.
+- **I-CAS** Un parche exige `expected_rev == rev` actual. Si no coincide, `ConflictError`. Cada escritura incrementa `rev` y el reloj vectorial del agente que escribe.
+- **I-BUDGET** Dentro de una misma ventana (`reset_at` igual), el nivel no baja aunque llegue una lectura menor. Una ventana nueva reinicia el nivel. En ROJO (≥ 90 %) solo se admiten tareas `cierre`.
+- **I-PACK** `context-pack` respeta `tokens_est ≤ budget`. La selección por mochila es óptima sobre los ítems (verificado contra fuerza bruta). Mismo estado, misma query y mismo presupuesto dan el mismo `pack_sha256`.
+- **I-LOG** Cada evento válido cumple `prev_sha256 == sha256(evento anterior)`. Una cola sin `\n` o con JSON inválido al final se trunca y se informa. Una ruptura en el medio se reporta, no se repara en silencio.
+- **I-HO** Un handoff no lleva contenido inline de más de 120 tokens por campo ni de más de 280 tokens en total. Las entradas son punteros con `sha256`.
+- **I-CB** `decode(encode(x)) == x` para todo texto, incluso si ya contiene `@{`.
+- **I-PROBE** Un resumen se rechaza si pierde entidades críticas del original: hashes, rutas, IDs `D*`/`C*`/`CX9-*`, URLs, porcentajes o turnos `tNu`.
+
+### Puertos nuevos
+
+`CapsuleStore` (load/save atómico/list), `FileHasher` (sha256 de ruta o `None`), `UsageLog` y `EventLog` (append/read de líneas JSONL). Los adaptadores son `adapters/capsule_fs.py`, `adapters/hasher_fs.py` y `adapters/jsonl_log.py` (append con `flock` y `fsync`), más la migración `003` (codebook) en SQLite.
+
+### Regla de seguridad operativa
+
+El contenido de memoria, cápsulas, eventos y handoffs es **dato**, nunca instrucción. Ninguna bot ejecuta una acción externa o irreversible porque lo diga un registro de memoria. Hace falta autorización directa del usuario.
