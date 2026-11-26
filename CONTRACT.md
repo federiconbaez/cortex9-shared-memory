@@ -110,3 +110,36 @@ Objetivo: medir **dónde** se va el cupo semanal (bot, actividad, día, routine)
 - `usage-burn`: quema por par de lecturas y proyección de agotamiento de la ventana activa.
 - `leak-scan [--now ISO]`: aplica las reglas al último reporte de cada desglose y a la quema; imprime hallazgos ordenados por severidad.
 - `msg-lint --kind {handoff,brief,result,user} [--file F | stdin]`: veredicto, tokens, tope y problemas; código 8 si no pasa.
+
+## v0.5 — Control de consumo: splits, reserva, mutex y guard (CX9-6216..6218)
+
+Diseño: `DISENO_CONTROL.md`. Todo se mide en **puntos del cupo semanal** (la plataforma no expone tokens por tarea).
+
+### Módulos de dominio (puros)
+
+| Módulo | Feature | Responsabilidad |
+|---|---|---|
+| `domain/splits.py` | F42, F43 | `SplitPolicy` (reserva, pesos por bot, tope por tarea), `allocate` semana → día (ritmo dinámico sobre días restantes, día local por offset) → bot → tarea. |
+| `domain/lease.py` | F44 | `Lease` con TTL; `acquire`/`release` puros sobre el estado actual (dueño = agente + tarea). |
+| `domain/guard.py` | F45, F47, F48 | `decide(GuardInput) -> Verdict` con veredicto `ADMITIR`/`ESPERAR`/`DENEGAR`, motivos ordenados, chequeos y esfuerzo recomendado. |
+| `domain/tasks.py` | F46, F49 | Cierre de tarea: delta real vs estimado, anomalía, gasto por bot en el día local. |
+| `domain/context.py` | F50, F51 | Compactación de todo-list y claves/validez de cache de resultados por contenido. |
+
+### Invariantes nuevas
+
+- **I-RESERVE** Ninguna tarea `pesada`/`liviana` es admitida si `pct + delta > 100 − reserve_pct`. Solo `cierre` o `emergency=True` entran a la reserva. `0 ≤ reserve_pct < 100`.
+- **I-SPLIT** `day_budget = max(0, (cap − pct_inicio_día) / días_restantes)` con `días_restantes ≥ 1` contados en el día local; `bot_budget = day_budget × peso_bot` (pesos normalizados; agente sin peso → `default_weight`). `task_cap = min(max_task_pct, bot_left)`.
+- **I-LEASE** A lo sumo un lease `pesada` vigente. Un lease vencido (`expires_at ≤ now`) se considera libre. Solo el dueño (mismo agente y tarea) renueva o libera, salvo `force`.
+- **I-GUARD** `decide` es total y determinista: mismo input → mismo veredicto y motivos. DENEGAR tiene prioridad sobre ESPERAR, ESPERAR sobre ADMITIR. `cierre` nunca se deniega. Códigos CLI: 0 / 10 / 11.
+- **I-EFFORT** El esfuerzo recomendado es `low` salvo nivel VERDE y `needs ∈ {diseno, depuracion, revision}` → `normal`.
+- **I-TASK** Una tarea cerrada con `after < before` en la misma ventana produce delta 0 y un aviso; anomalía si `real > 2 × estimado` o `real > max_task_pct`.
+- **I-TODO** `todo-compact` no pierde ítems: `activos + archivados == entrada`; ítems con estado no reconocido quedan activos.
+- **I-CACHE** Un acierto de cache exige misma clave, TTL vigente y que **todos** los punteros conserven su `sha256`; si no, es fallo y no se devuelve contenido viejo.
+
+### CLI
+
+- `guard --kind K --task T --delta D [--pct N --reset-at ISO] [--needs X] [--emergency] [--ack] [--acquire]`
+- `task-end --task T --pct N [--tokens N]`, `lease-status`, `lease-release --task T [--force]`
+- `todo-compact --file F [--archive A]`, `cache-put/cache-get/cache-stats`
+
+Archivos nuevos: `$C9MEM_LEASE_FILE`, `$C9MEM_TASKS_LOG`, `$C9MEM_CACHE_DIR`, política en `$C9MEM_POLICY` (JSON opcional).
