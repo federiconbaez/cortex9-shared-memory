@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..domain.compression import Alias, decode, encode, probe
 from ..domain.harvest import harvest
 from ..domain.models import (
     Agent,
@@ -122,6 +123,23 @@ class MemoryService:
     def start_session(self, agent: str | None, channel: str, title: str, summary: str = "") -> int:
         return self.repo.add_session(Session(agent, channel, title, summary))
 
+    # codebook (F02) y sonda de fidelidad (F35)
+    def aliases(self) -> list[Alias]:
+        return [Alias(n, e) for n, e in self.repo.list_aliases()]
+
+    def codebook_add(self, name: str, expansion: str, agent: str | None = None) -> None:
+        a = Alias(name, expansion)
+        self.repo.add_alias(a.name, a.expansion, agent)
+
+    def encode(self, text: str) -> str:
+        return encode(text, self.aliases())
+
+    def decode(self, text: str) -> str:
+        return decode(text, self.aliases())
+
+    def probe(self, source: str, summary: str) -> dict[str, Any]:
+        return probe(source, summary, self.aliases())
+
     def add_summary(
         self,
         session_id: int,
@@ -129,7 +147,12 @@ class MemoryService:
         summary: str,
         tokens_est: int | None = None,
         agent: str | None = None,
+        source_text: str | None = None,
     ) -> int:
+        if source_text is not None:
+            res = self.probe(source_text, summary)
+            if not res["ok"]:
+                raise DomainError(f"resumen rechazado por la sonda de fidelidad; faltan: {', '.join(res['missing'])}")
         tokens = tokens_est if tokens_est is not None else MessageSummary.estimate_tokens(summary)
         return self.repo.add_summary(MessageSummary(session_id, turn_range, summary, tokens, agent))
 

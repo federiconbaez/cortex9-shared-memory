@@ -192,6 +192,24 @@ class SqliteMemoryRepository:
         assert cur.lastrowid is not None
         return cur.lastrowid
 
+    def add_alias(self, name: str, expansion: str, agent: str | None) -> None:
+        cur = self.db.execute("SELECT expansion FROM codebook_aliases WHERE name = ?", (name,)).fetchone()
+        if cur is not None:
+            if cur[0] != expansion:
+                raise DomainError(f"el alias {name} ya existe con otra expansión")
+            return
+        try:
+            self.db.execute(
+                "INSERT INTO codebook_aliases(name, expansion, agent_id, created_at) VALUES (?,?,?,?)",
+                (name, expansion, self.agent_id(agent), self.clock.now()),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DomainError(f"alias rechazado: {exc}") from exc
+        self.db.commit()
+
+    def list_aliases(self) -> list[tuple[str, str]]:
+        return [(r[0], r[1]) for r in self.db.execute("SELECT name, expansion FROM codebook_aliases ORDER BY name")]
+
     def recent_summaries(self, agent: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
         if agent:
             rows = self.db.execute(

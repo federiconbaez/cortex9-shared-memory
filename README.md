@@ -118,6 +118,13 @@ c9mem ledger --out /workspace/bot-memory/ledger/DECISIONS.md
 c9mem event-verify
 ```
 
+## Handoffs por punteros, codebook, plegado y sonda de fidelidad (F06, F02, F07, F35)
+
+- **Handoff (`handoff_v1`)**: el sobre entre bots tiene un tope de 280 tokens, y cada campo de 120 tokens o 15 líneas. Las entradas son punteros `ruta#Lx-Ly@sha256`: `handoff-prepare` fija los hashes, aplica la guarda de presupuesto (exit 9 `aborted_budget`) y registra `handoff_sent`. El receptor corre `handoff-check` (exit 4 si un insumo cambió) y responde con `handoff-result` (≤ 180 tokens).
+- **Codebook**: alias `@{NOMBRE}` en SQLite (migración 003) para rutas e identificadores que se repiten. `decode(encode(x)) == x` para cualquier texto, porque escapa `@`.
+- **fold**: pliega la salida larga de `pytest`, `go test` o logs. Deja el encabezado, las fallas únicas, las líneas de resumen y la cola, más la ruta al texto completo.
+- **summary-probe**: rechaza (exit 8) un resumen que pierde hashes, rutas, `D-n`/`C-n`, `CX9-*`, URLs, porcentajes o `tNu`. `session-summarize-add --source-file` lo aplica antes de guardar.
+
 ## Modelo y arquitectura
 
 `agents`, `sessions`, `message_summaries`, `memory_types` (`world` · `user_profile` · `behavior` · `workstream`), `memory_facts` (`+ memory_facts_fts`, `source_key` único parcial, `access_count`, `last_accessed_at`), `confidence_labels` (`alta` · `media` · `estimacion` · `no_encontrado`), `confidence_label_usage`, `archetypes`, `instruments`, `skills`, `skill_links`, `entity_relations` (bi-temporal: `valid_from`, `valid_until`), `schema_migrations`.

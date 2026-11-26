@@ -74,6 +74,7 @@ def _parser() -> argparse.ArgumentParser:
     sm.add_argument("turn_range", help="ej. t269u-t281u")
     sm.add_argument("summary")
     sm.add_argument("--tokens", type=int)
+    sm.add_argument("--source-file", help="tramo original: si el resumen pierde entidades críticas, se rechaza (F35)")
 
     sub.add_parser("archetype-list")
 
@@ -215,6 +216,25 @@ def _parser() -> argparse.ArgumentParser:
     ct.add_argument("--task")
     lg = sub.add_parser("ledger", help="vista DECISIONS.md generada del log")
     lg.add_argument("--out")
+
+    ca = sub.add_parser("codebook-add", help="alias compartido @{NOMBRE} -> expansión (F02)")
+    ca.add_argument("name")
+    ca.add_argument("expansion")
+    sub.add_parser("codebook-list")
+    for name in ("encode", "decode"):
+        x = sub.add_parser(name, help=f"{name} con el codebook (sin pérdida)")
+        x.add_argument("text", nargs="?")
+        x.add_argument("--file")
+    fo = sub.add_parser("fold", help="plegar salida larga de herramienta (F07)")
+    fo.add_argument("--file", required=True)
+    fo.add_argument("--ref", help="ruta a citar para el texto completo (por defecto --file)")
+    fo.add_argument("--max-lines", type=int, default=40)
+    pr = sub.add_parser("summary-probe", help="¿el resumen conserva las entidades críticas? (F35)")
+    pr.add_argument("--source", required=True, help="archivo original")
+    pr.add_argument("--summary", required=True, help="archivo del resumen")
+    for name in ("handoff-prepare", "handoff-check", "handoff-result"):
+        h = sub.add_parser(name, help="sobre de handoff por punteros (F06)")
+        h.add_argument("--file", required=True, help="JSON del sobre")
     return p
 
 
@@ -226,6 +246,36 @@ def _kv(items: list[str], op: str) -> list[dict[str, object]]:
             raise DomainError(f"usar CAMPO=VALOR: {it!r}")
         out.append({"op": op, "field": k, "index": int(v)} if op == "remove" else {"op": op, "field": k, "value": v})
     return out
+
+
+def _tools(a: argparse.Namespace) -> int:
+    from .adapters.hasher_fs import FsFileHasher
+    from .adapters.jsonl_log import JsonlFileLog
+    from .adapters.sqlite_repo import UtcClock
+    from .application.budget import BudgetService
+    from .application.events import EventService
+    from .application.handoff import HandoffService
+    from .domain.compression import fold_output
+
+    if a.cmd == "fold":
+        folded, stats = fold_output(Path(a.file).read_text(encoding="utf-8", errors="replace"),
+                                    ref=a.ref or str(Path(a.file).resolve()), max_lines=a.max_lines)
+        print(folded)
+        print(f"<!-- fold: {json.dumps(stats)} -->")
+        return 0
+    clock = UtcClock()
+    svc = HandoffService(FsFileHasher(), BudgetService(JsonlFileLog(a.usage_log), clock),
+                         EventService(JsonlFileLog(a.events_log), clock))
+    raw = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    if a.cmd == "handoff-prepare":
+        print(dumps(svc.prepare(raw)))
+    elif a.cmd == "handoff-check":
+        res = svc.check(raw.get("envelope", raw))
+        print(dumps(res))
+        return 0 if res["ok"] else 4
+    else:
+        print(dumps(svc.result(raw)))
+    return 0
 
 
 def _events(a: argparse.Namespace) -> int:
@@ -307,6 +357,12 @@ def _capsules(a: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parser().parse_args(argv)
+    if a.cmd == "fold" or a.cmd.startswith("handoff-"):
+        try:
+            return _tools(a)
+        except DomainError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 9 if str(e).startswith("aborted_budget") else 1
     if a.cmd in ("event-append", "event-verify", "decide", "contradict", "ledger"):
         try:
             return _events(a)
@@ -387,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
         elif c == "session-start":
             print(svc.start_session(a.agent, a.channel, a.title, a.summary))
         elif c == "session-summarize-add":
-            print(svc.add_summary(a.session_id, a.turn_range, a.summary, a.tokens, a.agent))
+            src = Path(a.source_file).read_text(encoding="utf-8") if a.source_file else None
+            print(svc.add_summary(a.session_id, a.turn_range, a.summary, a.tokens, a.agent, source_text=src))
         elif c == "archetype-list":
             for r in repo.list_archetypes():
                 print(f"{r['slug']}: {r['name']} — {r['definition']}")
@@ -458,6 +515,19 @@ def main(argv: list[str] | None = None) -> int:
                 print(a.out)
             else:
                 print(text)
+        elif c == "codebook-add":
+            svc.codebook_add(a.name, a.expansion, a.agent)
+            print("ok")
+        elif c == "codebook-list":
+            for a_ in svc.aliases():
+                print(f"@{{{a_.name}}} = {a_.expansion}")
+        elif c in ("encode", "decode"):
+            body = Path(a.file).read_text(encoding="utf-8") if a.file else (a.text or "")
+            print(svc.encode(body) if c == "encode" else svc.decode(body), end="" if a.file else "\n")
+        elif c == "summary-probe":
+            res = svc.probe(Path(a.source).read_text(encoding="utf-8"), Path(a.summary).read_text(encoding="utf-8"))
+            print(dumps(res))
+            return 0 if res["ok"] else 8
         elif c == "import-json":
             print(dumps(svc.import_(json.loads(Path(a.path).read_text(encoding="utf-8")), a.mode)))
         return 0
