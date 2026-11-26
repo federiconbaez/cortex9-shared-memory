@@ -20,6 +20,7 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="c9mem", description="Memoria compartida CORTEX-9 (SQLite)")
     p.add_argument("--db", default=default_db())
     p.add_argument("--agent", default=os.environ.get("C9MEM_AGENT"), help="nombre del agente que escribe")
+    p.add_argument("--usage-log", default=os.environ.get("C9MEM_USAGE_LOG") or str(Path.cwd() / "usage" / "usage-log.jsonl"))
     p.add_argument("--capsules-dir", default=os.environ.get("C9MEM_CAPSULES_DIR") or str(Path.cwd() / "capsules"))
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -176,6 +177,19 @@ def _parser() -> argparse.ArgumentParser:
     cpat.add_argument("--ops", help="lista JSON de operaciones")
 
     sub.add_parser("capsule-list")
+
+    ur = sub.add_parser("usage-record", help="registrar lectura del uso semanal (F31)")
+    ur.add_argument("--pct", type=float, required=True)
+    ur.add_argument("--reset-at", required=True, help="ISO-8601 con zona, p. ej. 2026-11-26T00:37:00-03:00")
+    ur.add_argument("--task")
+    ur.add_argument("--phase", choices=["before", "after", "point"], default="point")
+    ur.add_argument("--tokens", type=int)
+    ur.add_argument("--source", default="platform")
+    sub.add_parser("usage-status", help="nivel 50/75/90 y política vigente")
+    ua = sub.add_parser("usage-admit", help="¿se puede lanzar esta tarea sin cruzar el techo?")
+    ua.add_argument("--kind", choices=["pesada", "liviana", "cierre"], required=True)
+    ua.add_argument("--delta", type=float, help="puntos porcentuales estimados")
+    ua.add_argument("--tokens", type=int, help="tokens estimados (usa calibración)")
     return p
 
 
@@ -187,6 +201,28 @@ def _kv(items: list[str], op: str) -> list[dict[str, object]]:
             raise DomainError(f"usar CAMPO=VALOR: {it!r}")
         out.append({"op": op, "field": k, "index": int(v)} if op == "remove" else {"op": op, "field": k, "value": v})
     return out
+
+
+def _usage(a: argparse.Namespace) -> int:
+    from .adapters.jsonl_log import JsonlFileLog
+    from .adapters.sqlite_repo import UtcClock
+    from .application.budget import BudgetService
+    from .domain.scoring import parse_iso
+
+    svc = BudgetService(JsonlFileLog(a.usage_log), UtcClock())
+    if a.cmd == "usage-record":
+        reset = parse_iso(a.reset_at).isoformat().replace("+00:00", "Z")
+        st = svc.record(a.pct, reset, a.agent or "primary", task_id=a.task, phase=a.phase, tokens_est=a.tokens,
+                        source=a.source)
+    elif a.cmd == "usage-status":
+        st = svc.status()
+    else:
+        res = svc.admit(a.kind, a.delta, a.tokens)
+        print(dumps(res))
+        return 0 if res["allowed"] else 6
+    print(dumps({"level": st.level, "pct": st.pct, "reset_at": st.reset_at, "policy": st.policy, "alert": st.alert,
+                 "readings": st.readings}))
+    return 0
 
 
 def _capsules(a: argparse.Namespace) -> int:
@@ -218,6 +254,12 @@ def _capsules(a: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parser().parse_args(argv)
+    if a.cmd.startswith("usage-"):
+        try:
+            return _usage(a)
+        except DomainError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     if a.cmd.startswith("capsule-"):
         try:
             return _capsules(a)

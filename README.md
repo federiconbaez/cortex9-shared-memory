@@ -91,6 +91,17 @@ c9mem capsule-show aaai27
 c9mem --agent tween-forge capsule-patch aaai27 --rev 1 --set status=listo --add "decisiones=D-3 anonimizado"
 ```
 
+## Semáforo de consumo 50/75/90 (F31, F29)
+
+Las bots anotan lecturas del uso semanal en un JSONL compartido (append con `flock` y `fsync`), en hitos: al empezar, antes de un handoff pesado y al cerrar. Así ninguna gasta una consulta extra para saber cuánto queda. Dentro de una ventana semanal el nivel solo sube. `VERDE` < 50 ≤ `AMARILLO` < 75 ≤ `AMBAR` < 90 ≤ `ROJO`. Cada nivel fija el presupuesto de `context-pack`, los handoffs en paralelo y si se admite trabajo pesado. `usage-admit` rechaza (exit 6) una tarea que cruzaría su techo: 75 % para las pesadas, 90 % para las livianas y 100 % para el cierre. El delta lo declara la bot o sale de la calibración con pares before/after.
+
+```bash
+export C9MEM_USAGE_LOG=/workspace/bot-memory/usage/usage-log.jsonl
+c9mem --agent ben usage-record --pct 79.6 --reset-at 2026-11-26T00:37:00-03:00
+c9mem usage-status
+c9mem usage-admit --kind pesada --delta 7
+```
+
 ## Modelo y arquitectura
 
 `agents`, `sessions`, `message_summaries`, `memory_types` (`world` · `user_profile` · `behavior` · `workstream`), `memory_facts` (`+ memory_facts_fts`, `source_key` único parcial, `access_count`, `last_accessed_at`), `confidence_labels` (`alta` · `media` · `estimacion` · `no_encontrado`), `confidence_label_usage`, `archetypes`, `instruments`, `skills`, `skill_links`, `entity_relations` (bi-temporal: `valid_from`, `valid_until`), `schema_migrations`.

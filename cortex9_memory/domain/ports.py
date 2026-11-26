@@ -1,7 +1,7 @@
 """Puertos del dominio (interfaces). Los adaptadores los implementan."""
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 from .models import (
@@ -82,3 +82,10 @@ class CapsuleStore(Protocol):
 
 class FileHasher(Protocol):
     def sha256(self, path: str) -> str | None: ...
+
+
+class AppendLog(Protocol):
+    """Log JSONL append-only. `append_atomic` recibe el texto actual bajo lock y devuelve lo que se agrega."""
+
+    def read_text(self) -> str: ...
+    def append_atomic(self, build: Callable[[str], str]) -> str: ...
