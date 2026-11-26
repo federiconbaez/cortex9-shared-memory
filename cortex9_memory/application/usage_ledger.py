@@ -62,3 +62,21 @@ class LedgerService:
                 "burns": [{"t0": b.t0, "t1": b.t1, "delta_pct": b.delta_pct, "pts_per_hour": round(b.pts_per_hour, 3),
                            "label": "MEDIDO"} for b in active],
                 "projection": proj}
+
+
+def scan_leaks(ledger: LedgerService, thresholds: Any = None) -> dict[str, Any]:
+    """F40: último reporte de cada desglose + quema de la ventana activa."""
+    from ..domain.budget import evaluate
+    from ..domain.leaks import scan
+
+    snaps, _ = ledger.budget.snapshots()
+    now = ledger.clock.now()
+    st = evaluate(snaps, now)
+    burns = [b for b in burn_rates(snaps) if b.reset_at == st.reset_at]
+    proj = None
+    if burns and st.pct is not None and st.reset_at:
+        proj = project_exhaustion(st.pct, burns[-1].pts_per_hour, now, st.reset_at)
+    findings = scan(ledger.latest().values(), burns, proj, thresholds)
+    return {"level": st.level, "pct": st.pct, "crit": sum(f.severity == "crit" for f in findings),
+            "findings": [{"rule": f.rule, "severity": f.severity, "label": f.label, "message": f.message,
+                          "evidence": f.evidence} for f in findings]}

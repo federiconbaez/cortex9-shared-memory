@@ -194,6 +194,10 @@ def _parser() -> argparse.ArgumentParser:
     ui = sub.add_parser("usage-ingest", help="guardar un reporte de uso por bot/actividad/día/routine (F39)")
     ui.add_argument("--file", help="texto del reporte; si se omite, stdin")
     ui.add_argument("--reset-at", help="ISO-8601; si se pasa, la lectura N%% también alimenta el semáforo")
+    sub.add_parser("leak-scan", help="reglas de fuga sobre reportes y quema (F40); código 7 si hay crit")
+    ml = sub.add_parser("msg-lint", help="lint de handoff/brief/resultado/reporte (F41); código 8 si no pasa")
+    ml.add_argument("--kind", choices=["handoff", "brief", "result", "user"], required=True)
+    ml.add_argument("--file", help="texto; si se omite, stdin")
     sub.add_parser("usage-burn", help="velocidad de quema y proyección de agotamiento (F39)")
     ua = sub.add_parser("usage-admit", help="¿se puede lanzar esta tarea sin cruzar el techo?")
     ua.add_argument("--kind", choices=["pesada", "liviana", "cierre"], required=True)
@@ -318,10 +322,14 @@ def _usage(a: argparse.Namespace) -> int:
     from .domain.scoring import parse_iso
 
     svc = BudgetService(JsonlFileLog(a.usage_log), UtcClock())
-    if a.cmd in ("usage-ingest", "usage-burn"):
-        from .application.usage_ledger import LedgerService
+    if a.cmd in ("usage-ingest", "usage-burn", "leak-scan"):
+        from .application.usage_ledger import LedgerService, scan_leaks
 
         led = LedgerService(JsonlFileLog(a.shares_log), svc, UtcClock())
+        if a.cmd == "leak-scan":
+            res = scan_leaks(led)
+            print(dumps(res))
+            return 7 if res["crit"] else 0
         if a.cmd == "usage-burn":
             print(dumps(led.burn()))
             return 0
@@ -385,7 +393,15 @@ def main(argv: list[str] | None = None) -> int:
         except DomainError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-    if a.cmd.startswith("usage-"):
+    if a.cmd == "msg-lint":
+        from .domain.leaks import lint_message
+
+        text = Path(a.file).read_text(encoding="utf-8") if a.file else sys.stdin.read()
+        lint = lint_message(text, a.kind)
+        print(dumps({"ok": lint.ok, "kind": lint.kind, "tokens": lint.tokens, "limit": lint.limit,
+                     "issues": list(lint.issues), "suggestions": list(lint.suggestions)}))
+        return 0 if lint.ok else 8
+    if a.cmd.startswith("usage-") or a.cmd == "leak-scan":
         try:
             return _usage(a)
         except DomainError as e:

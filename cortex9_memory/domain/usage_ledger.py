@@ -14,11 +14,8 @@ from .scoring import parse_iso
 APPROX_LT1 = 0.5
 DIMENSIONS = ("bot", "activity", "routine", "day")
 _PCT = re.compile(r"Weekly usage limit:\s*(\d+(?:\.\d+)?)%\s*used", re.I)
-_HEADER = re.compile(
-    r"usage\s+(over the last 7 days|over the last 30 days|this week|this billing cycle)?[^\n]*?,\s*by\s+"
-    r"([a-z ,]+?),\s*as shares",
-    re.I,
-)
+_HEADER = re.compile(r"\bby\s+([a-z ,]+?),\s*as shares", re.I)
+_PERIOD = re.compile(r"usage\s+(over the last 7 days|over the last 30 days|this week|this billing cycle)", re.I)
 _ROW = re.compile(r"^(?P<indent>\s*)-\s+(?P<name>.+):\s+(?P<pct><1|\d+(?:\.\d+)?)%(?P<rest>.*)$")
 _RUNS = re.compile(r"about\s+(\d+)\s+runs?\s+a\s+week", re.I)
 _PERIODS = {
@@ -89,8 +86,9 @@ def parse_report(text: str, captured_at: str) -> UsageReport:
     m = _PCT.search(text)
     pct = float(m.group(1)) if m else None
     h = _HEADER.search(text)
-    period = _PERIODS.get(h.group(1).lower()) if h and h.group(1) else None
-    dims = _dims(h.group(2)) if h else ()
+    pm = _PERIOD.search(text)
+    period = _PERIODS.get(pm.group(1).lower()) if pm else None
+    dims = _dims(h.group(1)) if h else ()
     rows: list[ShareRow] = []
     stack: list[str] = []
     for line in text.splitlines():
