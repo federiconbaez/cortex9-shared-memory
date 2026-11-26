@@ -39,6 +39,13 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--valid-from")
     f.add_argument("--valid-until")
     f.add_argument("--session", type=int)
+    f.add_argument("--trust", default="T2", help="procedencia: T0 externo, T1 bot, T2 verificado, T3 usuario")
+    f.add_argument("--tainted", action="store_true", help="marcar como derivado de insumo no confiable")
+
+    tc = sub.add_parser("taint-check", help="clasificar un texto con el taint-guard (F27)")
+    tc.add_argument("text", nargs="?", help="texto; si se omite, se lee --file")
+    tc.add_argument("--file")
+    tc.add_argument("--trust", default="T1")
 
     s = sub.add_parser("fact-search")
     s.add_argument("query", nargs="?")
@@ -176,8 +183,15 @@ def main(argv: list[str] | None = None) -> int:
                 valid_until=a.valid_until,
                 agent=a.agent,
                 session_id=a.session,
+                trust_tier=a.trust,
+                tainted=a.tainted,
             )
             print(fid)
+        elif c == "taint-check":
+            body = Path(a.file).read_text(encoding="utf-8") if a.file else (a.text or "")
+            v = svc.taint_check(body, a.trust)
+            print(dumps({"status": v.status, "reasons": list(v.reasons), "tier": v.tier.name}))
+            return 0 if not v.blocked else 3
         elif c == "fact-search":
             rows = svc.search(
                 a.query,

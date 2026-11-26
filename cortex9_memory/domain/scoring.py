@@ -5,6 +5,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
+from .taint import neutralize
+
 
 def parse_iso(ts: str) -> datetime:
     if ts.endswith("Z"):
@@ -78,7 +80,8 @@ def pack_context(
         head_t = estimate_tokens(sec_head)
         added: list[str] = []
         sec_used = 0
-        for idx, line in enumerate(rows):
+        for idx, raw in enumerate(rows):
+            line = neutralize(raw)
             lt = estimate_tokens(line)
             need = (head_t if not added else 0) + sec_used + lt
             if used + need > budget_tokens:

@@ -19,10 +19,12 @@ from ..domain.models import (
     Relation,
     Session,
     Skill,
+    require_json,
     require_slug,
 )
 from ..domain.ports import MemoryRepository
 from ..domain.scoring import pack_context
+from ..domain.taint import Verdict, assess, enforce_fact_write, parse_tier
 from . import seed
 
 EXPORT_FORMAT = "cortex9-shared-memory/v1"
@@ -81,7 +83,14 @@ class MemoryService:
             self.sync_skills(wf, link_archetypes=True)
 
     # hechos
-    def add_fact(self, **kw: Any) -> int:
+    def add_fact(self, trust_tier: str = "T2", tainted: bool = False, **kw: Any) -> int:
+        """Persiste un hecho tras el taint-guard (I-TAINT). Tier y taint quedan en meta_json."""
+        tier = parse_tier(trust_tier)
+        enforce_fact_write(kw.get("type", ""), str(kw.get("fact_text") or ""), tier, tainted)
+        meta = json.loads(require_json(kw.get("meta_json", "{}"), "meta_json"))
+        if isinstance(meta, dict):
+            meta["_trust"] = {"tier": tier.name, "tainted": bool(tainted)}
+            kw["meta_json"] = meta
         fact = MemoryFact(**kw)
         fid = self.repo.add_fact(fact)
         self.repo.log_label(fact.resolved_label(), "fact", fid, "fact-add", fact.agent)
@@ -100,6 +109,9 @@ class MemoryService:
         if limit < 1:
             raise DomainError("limit >= 1")
         return self.repo.search_facts(query, type_, include_expired, limit, as_of, touch, half_life_days)
+
+    def taint_check(self, text: str, trust_tier: str = "T1") -> Verdict:
+        return assess(text, parse_tier(trust_tier))
 
     def supersede(self, old_id: int, new_id: int) -> None:
         if old_id == new_id:

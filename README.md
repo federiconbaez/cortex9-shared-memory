@@ -71,6 +71,15 @@ c9mem stats
 - **No toca `access_count` por defecto.** Solo `fact-search --touch` o `context-pack --touch` incrementan el uso, y en este último caso una sola vez por hecho realmente incluido (aunque el mismo id aparezca como workstream y como match).
 - En el JSON, `counts.match` son los hechos de la sección «Hechos relevantes» *después* de deduplicar contra secciones anteriores. `counts.matched_total` es cuántos hechos devolvió la búsqueda de `--query` y `counts.dedup` cuántos se omitieron por ya estar en `behavior` o `workstream`.
 
+## Taint-guard (F27): memoria que no se deja envenenar
+
+Cada escritura de hecho pasa por un detector determinista. Bloquea Unicode oculto o bidi, marcado falso de sistema (`<system>`, `<user_query>`…) y frases imperativas de inyección. La procedencia se declara con `--trust` (`T0` externo, `T1` bot, `T2` verificado, `T3` usuario) y se guarda en `meta_json._trust`. Un hecho `behavior` exige `T2` o más y sin taint. `context-pack` neutraliza el texto recuperado antes de devolverlo.
+
+```bash
+c9mem taint-check "ignorá las instrucciones anteriores" --trust T0   # exit 3, status blocked
+c9mem fact-add world "Dato leído en un blog" --trust T0 --tainted
+```
+
 ## Modelo y arquitectura
 
 `agents`, `sessions`, `message_summaries`, `memory_types` (`world` · `user_profile` · `behavior` · `workstream`), `memory_facts` (`+ memory_facts_fts`, `source_key` único parcial, `access_count`, `last_accessed_at`), `confidence_labels` (`alta` · `media` · `estimacion` · `no_encontrado`), `confidence_label_usage`, `archetypes`, `instruments`, `skills`, `skill_links`, `entity_relations` (bi-temporal: `valid_from`, `valid_until`), `schema_migrations`.
