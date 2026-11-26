@@ -26,6 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--tasks-log", default=os.environ.get("C9MEM_TASKS_LOG") or str(Path.cwd() / "usage" / "tasks.jsonl"))
     p.add_argument("--lease-file", default=os.environ.get("C9MEM_LEASE_FILE") or str(Path.cwd() / "usage" / "heavy.lease"))
     p.add_argument("--policy", default=os.environ.get("C9MEM_POLICY"), help="JSON de SplitPolicy (opcional)")
+    p.add_argument("--cache-dir", default=os.environ.get("C9MEM_CACHE_DIR") or str(Path.cwd() / "cache"))
     p.add_argument("--capsules-dir", default=os.environ.get("C9MEM_CAPSULES_DIR") or str(Path.cwd() / "capsules"))
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -217,6 +218,20 @@ def _parser() -> argparse.ArgumentParser:
     lr = sub.add_parser("lease-release", help="liberar el lease propio (o --force)")
     lr.add_argument("--task", required=True)
     lr.add_argument("--force", action="store_true")
+    tc = sub.add_parser("todo-compact", help="dejar solo PENDING/IN_PROGRESS; archivar el resto (F50)")
+    tc.add_argument("--file", help="todo-list; si se omite, stdin")
+    tc.add_argument("--archive", help="archivo donde agregar los ítems archivados")
+    tc.add_argument("--out", help="escribir la lista activa aquí (si no, stdout)")
+    cput = sub.add_parser("cache-put", help="guardar un resultado con sus insumos (F51)")
+    cput.add_argument("--kind", required=True)
+    cput.add_argument("--query", required=True)
+    cput.add_argument("--file", help="contenido; si se omite, stdin")
+    cput.add_argument("--pointer", action="append", default=[], help="archivo de insumo (se guarda su sha256)")
+    cput.add_argument("--ttl", type=int, default=86400, help="segundos")
+    cget = sub.add_parser("cache-get", help="resultado si TTL e insumos siguen iguales; código 3 si falla")
+    cget.add_argument("--kind", required=True)
+    cget.add_argument("--query", required=True)
+    sub.add_parser("cache-stats")
     sub.add_parser("leak-scan", help="reglas de fuga sobre reportes y quema (F40); código 7 si hay crit")
     ml = sub.add_parser("msg-lint", help="lint de handoff/brief/resultado/reporte (F41); código 8 si no pasa")
     ml.add_argument("--kind", choices=["handoff", "brief", "result", "user"], required=True)
@@ -377,6 +392,44 @@ def _control(a: argparse.Namespace) -> int:
     return 0 if res["released"] else 1
 
 
+def _context(a: argparse.Namespace) -> int:
+    if a.cmd == "todo-compact":
+        from .domain.context import compact_todo
+
+        c = compact_todo(Path(a.file).read_text(encoding="utf-8") if a.file else sys.stdin.read())
+        if a.archive and c.archived_text:
+            with open(a.archive, "a", encoding="utf-8") as fh:
+                fh.write(c.archived_text)
+        if a.out:
+            Path(a.out).write_text(c.active_text, encoding="utf-8")
+        else:
+            sys.stdout.write(c.active_text)
+        print(dumps({"active": c.n_active, "archived": c.n_archived, "tokens_before": c.tokens_before,
+                     "tokens_after": c.tokens_after, "tokens_saved": c.tokens_saved}), file=sys.stderr)
+        return 0
+    from .adapters.cache_fs import FsCacheStore
+    from .adapters.hasher_fs import FsFileHasher
+    from .adapters.jsonl_log import JsonlFileLog
+    from .adapters.sqlite_repo import UtcClock
+    from .application.context import CacheService
+
+    svc = CacheService(FsCacheStore(a.cache_dir), FsFileHasher(), JsonlFileLog(Path(a.cache_dir) / "stats.jsonl"),
+                       UtcClock())
+    if a.cmd == "cache-put":
+        text = Path(a.file).read_text(encoding="utf-8") if a.file else sys.stdin.read()
+        print(dumps(svc.put(a.kind, a.query, text, a.pointer, a.ttl)))
+        return 0
+    if a.cmd == "cache-get":
+        content, why = svc.get(a.kind, a.query)
+        if content is None:
+            print(f"miss: {why}", file=sys.stderr)
+            return 3
+        sys.stdout.write(content)
+        return 0
+    print(dumps(svc.stats()))
+    return 0
+
+
 def _usage(a: argparse.Namespace) -> int:
     from .adapters.jsonl_log import JsonlFileLog
     from .adapters.sqlite_repo import UtcClock
@@ -458,6 +511,12 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd in ("guard", "task-end", "lease-status", "lease-release"):
         try:
             return _control(a)
+        except DomainError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+    if a.cmd in ("todo-compact", "cache-put", "cache-get", "cache-stats"):
+        try:
+            return _context(a)
         except DomainError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
