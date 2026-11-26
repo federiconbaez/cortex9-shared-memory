@@ -23,6 +23,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--events-log", default=os.environ.get("C9MEM_EVENTS_LOG") or str(Path.cwd() / "events" / "c9-events.jsonl"))
     p.add_argument("--usage-log", default=os.environ.get("C9MEM_USAGE_LOG") or str(Path.cwd() / "usage" / "usage-log.jsonl"))
     p.add_argument("--shares-log", default=os.environ.get("C9MEM_SHARES_LOG") or str(Path.cwd() / "usage" / "shares.jsonl"))
+    p.add_argument("--tasks-log", default=os.environ.get("C9MEM_TASKS_LOG") or str(Path.cwd() / "usage" / "tasks.jsonl"))
+    p.add_argument("--lease-file", default=os.environ.get("C9MEM_LEASE_FILE") or str(Path.cwd() / "usage" / "heavy.lease"))
+    p.add_argument("--policy", default=os.environ.get("C9MEM_POLICY"), help="JSON de SplitPolicy (opcional)")
     p.add_argument("--capsules-dir", default=os.environ.get("C9MEM_CAPSULES_DIR") or str(Path.cwd() / "capsules"))
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -194,6 +197,26 @@ def _parser() -> argparse.ArgumentParser:
     ui = sub.add_parser("usage-ingest", help="guardar un reporte de uso por bot/actividad/día/routine (F39)")
     ui.add_argument("--file", help="texto del reporte; si se omite, stdin")
     ui.add_argument("--reset-at", help="ISO-8601; si se pasa, la lectura N%% también alimenta el semáforo")
+    gd = sub.add_parser("guard", help="ADMITIR/ESPERAR/DENEGAR antes de un bloque (F45); códigos 0/10/11")
+    gd.add_argument("--kind", choices=["pesada", "liviana", "cierre"], required=True)
+    gd.add_argument("--task", required=True)
+    gd.add_argument("--delta", type=float, required=True, help="puntos de cupo estimados")
+    gd.add_argument("--pct", type=float, help="lectura actual del uso semanal (se registra)")
+    gd.add_argument("--reset-at", help="ISO-8601 del reset (con --pct)")
+    gd.add_argument("--needs", choices=["diseno", "depuracion", "revision"])
+    gd.add_argument("--emergency", action="store_true", help="permite usar la reserva")
+    gd.add_argument("--ack", action="store_true", help="OK explícito de Federico (ÁMBAR / hallazgos crit)")
+    gd.add_argument("--acquire", action="store_true", help="si ADMITIR: tomar lease y abrir la tarea")
+    gd.add_argument("--short", action="store_true", help="una línea")
+    te = sub.add_parser("task-end", help="cerrar tarea: delta real, anomalía, libera lease (F46/F49)")
+    te.add_argument("--task", required=True)
+    te.add_argument("--pct", type=float, required=True)
+    te.add_argument("--reset-at")
+    te.add_argument("--tokens", type=int)
+    sub.add_parser("lease-status", help="mutex de trabajo pesado (F44)")
+    lr = sub.add_parser("lease-release", help="liberar el lease propio (o --force)")
+    lr.add_argument("--task", required=True)
+    lr.add_argument("--force", action="store_true")
     sub.add_parser("leak-scan", help="reglas de fuga sobre reportes y quema (F40); código 7 si hay crit")
     ml = sub.add_parser("msg-lint", help="lint de handoff/brief/resultado/reporte (F41); código 8 si no pasa")
     ml.add_argument("--kind", choices=["handoff", "brief", "result", "user"], required=True)
@@ -315,6 +338,45 @@ def _events(a: argparse.Namespace) -> int:
     return 0
 
 
+def _control(a: argparse.Namespace) -> int:
+    from .adapters.jsonl_log import JsonlFileLog
+    from .adapters.lease_fs import FsLeaseStore
+    from .adapters.sqlite_repo import UtcClock
+    from .application.budget import BudgetService
+    from .application.control import ControlService
+    from .application.usage_ledger import LedgerService
+    from .domain.scoring import parse_iso
+    from .domain.splits import SplitPolicy
+
+    clock = UtcClock()
+    budget = BudgetService(JsonlFileLog(a.usage_log), clock)
+    policy = SplitPolicy.from_dict(json.loads(Path(a.policy).read_text(encoding="utf-8"))) if a.policy else None
+    svc = ControlService(budget, LedgerService(JsonlFileLog(a.shares_log), budget, clock),
+                         JsonlFileLog(a.tasks_log), FsLeaseStore(a.lease_file), clock, policy)
+    agent = a.agent or "primary"
+
+    def iso(v: str | None) -> str | None:
+        return parse_iso(v).isoformat().replace("+00:00", "Z") if v else None
+
+    if a.cmd == "guard":
+        v = svc.guard(a.kind, agent, a.task, a.delta, a.needs, a.emergency, a.ack, a.acquire, a.pct, iso(a.reset_at))
+        if a.short:
+            print(f"{v.decision} [{v.effort}]: " + " | ".join(v.reasons))
+        else:
+            print(dumps({"decision": v.decision, "reasons": list(v.reasons), "effort": v.effort, "checks": v.checks}))
+        return v.exit_code
+    if a.cmd == "task-end":
+        out = svc.task_end(a.task, agent, a.pct, iso(a.reset_at), a.tokens)
+        print(dumps(out.to_dict()))
+        return 12 if out.anomaly else 0
+    if a.cmd == "lease-status":
+        print(dumps(svc.lease_status()))
+        return 0
+    res = svc.lease_release(agent, a.task, a.force)
+    print(dumps(res))
+    return 0 if res["released"] else 1
+
+
 def _usage(a: argparse.Namespace) -> int:
     from .adapters.jsonl_log import JsonlFileLog
     from .adapters.sqlite_repo import UtcClock
@@ -390,6 +452,12 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd in ("event-append", "event-verify", "decide", "contradict", "ledger"):
         try:
             return _events(a)
+        except DomainError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+    if a.cmd in ("guard", "task-end", "lease-status", "lease-release"):
+        try:
+            return _control(a)
         except DomainError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1

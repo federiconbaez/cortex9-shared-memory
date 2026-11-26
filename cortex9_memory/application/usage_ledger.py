@@ -64,10 +64,11 @@ class LedgerService:
                 "projection": proj}
 
 
-def scan_leaks(ledger: LedgerService, thresholds: Any = None) -> dict[str, Any]:
-    """F40: último reporte de cada desglose + quema de la ventana activa."""
+def scan_leaks(ledger: LedgerService, thresholds: Any = None, since: str | None = None) -> dict[str, Any]:
+    """F40: último reporte de cada desglose + quema de la ventana activa. `since` descarta reportes viejos."""
     from ..domain.budget import evaluate
     from ..domain.leaks import scan
+    from ..domain.scoring import parse_iso
 
     snaps, _ = ledger.budget.snapshots()
     now = ledger.clock.now()
@@ -76,7 +77,8 @@ def scan_leaks(ledger: LedgerService, thresholds: Any = None) -> dict[str, Any]:
     proj = None
     if burns and st.pct is not None and st.reset_at:
         proj = project_exhaustion(st.pct, burns[-1].pts_per_hour, now, st.reset_at)
-    findings = scan(ledger.latest().values(), burns, proj, thresholds)
+    reps = [r for r in ledger.latest().values() if since is None or parse_iso(r.captured_at) >= parse_iso(since)]
+    findings = scan(reps, burns, proj, thresholds)
     return {"level": st.level, "pct": st.pct, "crit": sum(f.severity == "crit" for f in findings),
             "findings": [{"rule": f.rule, "severity": f.severity, "label": f.label, "message": f.message,
                           "evidence": f.evidence} for f in findings]}
