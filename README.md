@@ -106,6 +106,18 @@ c9mem usage-admit --kind pesada --delta 7
 
 Por defecto `context-pack` usa `--strategy knapsack`. Descarta duplicados por id y por texto normalizado (sin tildes, mayúsculas ni puntuación) y omite los casi duplicados (Jaccard ≥ 0,9). Penaliza la similitud con lo ya elegido (MMR) y resuelve una mochila 0-1 exacta que cuenta el costo de cada encabezado de sección. Las reglas `behavior` tienen prioridad. La salida trae `pack_sha256`: mismo estado, misma query y mismo presupuesto dan el mismo hash, así se puede reproducir qué contexto vio una bot. `--strategy greedy` mantiene el llenado secuencial de v0.2.
 
+## Log de eventos y ledger de decisiones (F25, F21)
+
+`c9-events.jsonl` es append-only. Cada línea encadena `prev_sha256` y se agrega bajo `flock` con `fsync`. `event-verify` informa la raíz Merkle. Una cola rota (escritura cortada) se recorta con `--repair`. Una edición en el medio corta la cadena y se informa (exit 7), pero no se repara sola. Las decisiones `D-n` y contradicciones `C-n` forman un CRDT LWW: el merge entre réplicas es conmutativo, asociativo e idempotente. `ledger` genera la vista `DECISIONS.md`, que no se edita a mano.
+
+```bash
+export C9MEM_EVENTS_LOG=/workspace/bot-memory/events/c9-events.jsonl
+c9mem --agent ben decide D-1 "Merge por fast-forward con CI verde"
+c9mem --agent ben contradict C-1 "Dos fuentes distintas sobre el deadline"
+c9mem ledger --out /workspace/bot-memory/ledger/DECISIONS.md
+c9mem event-verify
+```
+
 ## Modelo y arquitectura
 
 `agents`, `sessions`, `message_summaries`, `memory_types` (`world` · `user_profile` · `behavior` · `workstream`), `memory_facts` (`+ memory_facts_fts`, `source_key` único parcial, `access_count`, `last_accessed_at`), `confidence_labels` (`alta` · `media` · `estimacion` · `no_encontrado`), `confidence_label_usage`, `archetypes`, `instruments`, `skills`, `skill_links`, `entity_relations` (bi-temporal: `valid_from`, `valid_until`), `schema_migrations`.

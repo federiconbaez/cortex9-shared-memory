@@ -20,6 +20,7 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="c9mem", description="Memoria compartida CORTEX-9 (SQLite)")
     p.add_argument("--db", default=default_db())
     p.add_argument("--agent", default=os.environ.get("C9MEM_AGENT"), help="nombre del agente que escribe")
+    p.add_argument("--events-log", default=os.environ.get("C9MEM_EVENTS_LOG") or str(Path.cwd() / "events" / "c9-events.jsonl"))
     p.add_argument("--usage-log", default=os.environ.get("C9MEM_USAGE_LOG") or str(Path.cwd() / "usage" / "usage-log.jsonl"))
     p.add_argument("--capsules-dir", default=os.environ.get("C9MEM_CAPSULES_DIR") or str(Path.cwd() / "capsules"))
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -192,6 +193,28 @@ def _parser() -> argparse.ArgumentParser:
     ua.add_argument("--kind", choices=["pesada", "liviana", "cierre"], required=True)
     ua.add_argument("--delta", type=float, help="puntos porcentuales estimados")
     ua.add_argument("--tokens", type=int, help="tokens estimados (usa calibración)")
+
+    ea = sub.add_parser("event-append", help="agregar evento encadenado al log (F25)")
+    ea.add_argument("kind")
+    ea.add_argument("--task")
+    ea.add_argument("--payload", default="{}", help="objeto JSON chico (<= 120 tokens)")
+    ea.add_argument("--ref", help="puntero a contenido en disco")
+    ev = sub.add_parser("event-verify", help="verificar cadena y raíz Merkle")
+    ev.add_argument("--repair", action="store_true", help="recortar una cola rota (nunca una ruptura en el medio)")
+    dc = sub.add_parser("decide", help="registrar decisión D-n en el ledger (F21)")
+    dc.add_argument("id")
+    dc.add_argument("statement")
+    dc.add_argument("--status", default="vigente", choices=["vigente", "supersedida", "revocada"])
+    dc.add_argument("--supersedes")
+    dc.add_argument("--task")
+    ct = sub.add_parser("contradict", help="registrar contradicción C-n")
+    ct.add_argument("id")
+    ct.add_argument("statement")
+    ct.add_argument("--status", default="abierta", choices=["abierta", "resuelta"])
+    ct.add_argument("--resolved-by")
+    ct.add_argument("--task")
+    lg = sub.add_parser("ledger", help="vista DECISIONS.md generada del log")
+    lg.add_argument("--out")
     return p
 
 
@@ -203,6 +226,34 @@ def _kv(items: list[str], op: str) -> list[dict[str, object]]:
             raise DomainError(f"usar CAMPO=VALOR: {it!r}")
         out.append({"op": op, "field": k, "index": int(v)} if op == "remove" else {"op": op, "field": k, "value": v})
     return out
+
+
+def _events(a: argparse.Namespace) -> int:
+    from .adapters.jsonl_log import JsonlFileLog
+    from .adapters.sqlite_repo import UtcClock
+    from .application.events import EventService
+
+    svc = EventService(JsonlFileLog(a.events_log), UtcClock())
+    agent = a.agent or "primary"
+    if a.cmd == "event-append":
+        print(dumps(svc.append(agent, a.kind, a.task, json.loads(a.payload), a.ref)))
+    elif a.cmd == "event-verify":
+        rep = svc.verify(a.repair)
+        print(dumps(rep))
+        return 0 if rep["ok"] else 7
+    elif a.cmd == "decide":
+        print(dumps(svc.decide(agent, a.id, a.statement, a.status, a.supersedes, a.task)))
+    elif a.cmd == "contradict":
+        print(dumps(svc.contradict(agent, a.id, a.statement, a.status, a.resolved_by, a.task)))
+    else:
+        text = svc.ledger()
+        if a.out:
+            Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(a.out).write_text(text, encoding="utf-8")
+            print(a.out)
+        else:
+            print(text, end="")
+    return 0
 
 
 def _usage(a: argparse.Namespace) -> int:
@@ -256,6 +307,12 @@ def _capsules(a: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parser().parse_args(argv)
+    if a.cmd in ("event-append", "event-verify", "decide", "contradict", "ledger"):
+        try:
+            return _events(a)
+        except DomainError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     if a.cmd.startswith("usage-"):
         try:
             return _usage(a)
