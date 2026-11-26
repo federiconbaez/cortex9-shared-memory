@@ -23,7 +23,7 @@ from ..domain.models import (
     require_slug,
 )
 from ..domain.ports import MemoryRepository
-from ..domain.scoring import pack_context
+from ..domain.scoring import pack_context, pack_context_knapsack
 from ..domain.taint import Verdict, assess, enforce_fact_write, parse_tier
 from . import seed
 
@@ -221,7 +221,10 @@ class MemoryService:
         budget_tokens: int = 800,
         query: str | None = None,
         touch: bool = False,
+        strategy: str = "knapsack",
     ) -> dict[str, Any]:
+        if strategy not in ("knapsack", "greedy"):
+            raise DomainError("strategy debe ser knapsack o greedy")
         if budget_tokens < 40:
             raise DomainError("budget_tokens debe ser >= 40")
         behaviors = self.repo.search_facts(None, "behavior", False, 15, None, False)
@@ -234,7 +237,8 @@ class MemoryService:
             instruments = [
                 i for i in instruments if ql in i["acronym"].lower() or ql in i["name"].lower() or ql in i["related_workstream"].lower()
             ]
-        pack = pack_context(agent, budget_tokens, behaviors, workstreams, matches, summaries, instruments[:8])
+        packer = pack_context_knapsack if strategy == "knapsack" else pack_context
+        pack = packer(agent, budget_tokens, behaviors, workstreams, matches, summaries, instruments[:8])
         # Por defecto no toca access_count. Con touch=True incrementa una sola vez
         # por hecho realmente incluido (ya deduplicado en pack["fact_ids"]).
         if touch and pack["fact_ids"]:

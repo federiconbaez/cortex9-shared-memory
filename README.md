@@ -102,6 +102,10 @@ c9mem usage-status
 c9mem usage-admit --kind pesada --delta 7
 ```
 
+## Context pack óptimo (F15, F17, F05, F38)
+
+Por defecto `context-pack` usa `--strategy knapsack`. Descarta duplicados por id y por texto normalizado (sin tildes, mayúsculas ni puntuación) y omite los casi duplicados (Jaccard ≥ 0,9). Penaliza la similitud con lo ya elegido (MMR) y resuelve una mochila 0-1 exacta que cuenta el costo de cada encabezado de sección. Las reglas `behavior` tienen prioridad. La salida trae `pack_sha256`: mismo estado, misma query y mismo presupuesto dan el mismo hash, así se puede reproducir qué contexto vio una bot. `--strategy greedy` mantiene el llenado secuencial de v0.2.
+
 ## Modelo y arquitectura
 
 `agents`, `sessions`, `message_summaries`, `memory_types` (`world` · `user_profile` · `behavior` · `workstream`), `memory_facts` (`+ memory_facts_fts`, `source_key` único parcial, `access_count`, `last_accessed_at`), `confidence_labels` (`alta` · `media` · `estimacion` · `no_encontrado`), `confidence_label_usage`, `archetypes`, `instruments`, `skills`, `skill_links`, `entity_relations` (bi-temporal: `valid_from`, `valid_until`), `schema_migrations`.

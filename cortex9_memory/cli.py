@@ -139,6 +139,8 @@ def _parser() -> argparse.ArgumentParser:
         help="incrementar access_count de los hechos incluidos (desactivado por defecto)",
     )
     cp.add_argument("--json", action="store_true")
+    cp.add_argument("--strategy", choices=["knapsack", "greedy"], default="knapsack",
+                    help="knapsack: óptimo con dedup y MMR (F15/F17); greedy: llenado secuencial v0.2")
 
     bk = sub.add_parser("backup", help="snapshot consistente con rotación")
     bk.add_argument("--dir", default=os.environ.get("C9MEM_BACKUP_DIR", "./backups"))
@@ -381,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise DomainError(f"{a.entity_type} {a.entity} no existe")
             print(dumps(repo.neighbors(a.entity_type, eid, as_of=a.as_of, include_expired=a.all)))
         elif c == "context-pack":
-            pack = svc.context_pack(a.agent, a.budget, a.query, touch=a.touch)
+            pack = svc.context_pack(a.agent, a.budget, a.query, touch=a.touch, strategy=a.strategy)
             print(dumps(pack) if a.json else pack["text"])
         elif c == "backup":
             result = svc.backup(a.dir, repo.clock.now(), a.keep)
