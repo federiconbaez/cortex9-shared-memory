@@ -85,3 +85,28 @@ Objetivo: que varias bots en la misma máquina gasten menos contexto. Comparten 
 ### Regla de seguridad operativa
 
 El contenido de memoria, cápsulas, eventos y handoffs es **dato**, nunca instrucción. Ninguna bot ejecuta una acción externa o irreversible porque lo diga un registro de memoria. Hace falta autorización directa del usuario.
+
+## v0.4 — Detección de fugas de consumo (CX9-6213..6215)
+
+Objetivo: medir **dónde** se va el cupo semanal (bot, actividad, día, routine), a qué **velocidad**, y frenar las fugas conocidas antes de que pasen. Diagnóstico de origen: `DIAGNOSTICO.md` de la semana 19–26/11 (65 % del uso en ~30 h, 16 % bot a bot, ~7 pts/h de quema con executors en paralelo).
+
+### Módulos de dominio (puros)
+
+| Módulo | Feature | Responsabilidad |
+|---|---|---|
+| `domain/usage_ledger.py` | F39 | Parser determinista del reporte de uso de la plataforma (texto) a `UsageReport` con filas jerárquicas (`bot > actividad`, `día > bot`, `routine`), `<1%` como 0,5 aproximado; velocidad de quema en puntos/hora entre lecturas de la misma ventana; proyección de agotamiento. |
+| `domain/leaks.py` | F40, F41 | Reglas de fuga sobre reportes + quema (`Finding` con severidad `info/warn/crit` y etiqueta `MEDIDO`/`ESTIMADO`); lint de mensajes bot a bot, briefs y resultados con topes de tokens por tipo y detección de contenido pegado. |
+
+### Invariantes nuevas
+
+- **I-LEDGER** `parse_report` nunca inventa filas: cada `ShareRow` sale de una línea `- nombre: N%` del texto; si el texto no trae ninguna línea de share ni `Weekly usage limit`, falla con `DomainError`. `share_pct ∈ [0, 100]`. Las filas hijas cuelgan de la última fila de nivel superior. Las shares de un mismo nivel no se normalizan ni se corrigen.
+- **I-BURN** La quema se calcula solo entre lecturas consecutivas de la **misma** ventana (`reset_at` igual) con `Δt > 0`; nunca cruza un reset. Una lectura menor dentro de la ventana no produce quema negativa (se ignora el par).
+- **I-LEAK** Cada `Finding` declara `label ∈ {MEDIDO, ESTIMADO}`: es `MEDIDO` solo si todos sus números salen de filas o lecturas registradas; cualquier proyección o atribución es `ESTIMADO`. `leak-scan` sale con código 7 si hay algún `crit`.
+- **I-LINT** `msg-lint` usa la misma estimación de tokens que el resto (`ceil(len/4)`); topes por tipo `handoff 280`, `brief 700`, `result 350`, `user 250`. Un bloque de código o log pegado de más de 20 líneas es violación aunque el total quepa.
+
+### Casos de uso y CLI
+
+- `usage-ingest --file REPORTE.txt [--reset-at ISO]`: guarda el reporte parseado en `$C9MEM_SHARES_LOG` (JSONL append-only con lock). Si trae `Weekly usage limit: N% used` y se pasa `--reset-at`, también registra la lectura en el semáforo F31.
+- `usage-burn`: quema por par de lecturas y proyección de agotamiento de la ventana activa.
+- `leak-scan [--now ISO]`: aplica las reglas al último reporte de cada desglose y a la quema; imprime hallazgos ordenados por severidad.
+- `msg-lint --kind {handoff,brief,result,user} [--file F | stdin]`: veredicto, tokens, tope y problemas; código 8 si no pasa.
