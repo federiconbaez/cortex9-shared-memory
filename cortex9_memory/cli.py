@@ -20,6 +20,7 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="c9mem", description="Memoria compartida CORTEX-9 (SQLite)")
     p.add_argument("--db", default=default_db())
     p.add_argument("--agent", default=os.environ.get("C9MEM_AGENT"), help="nombre del agente que escribe")
+    p.add_argument("--capsules-dir", default=os.environ.get("C9MEM_CAPSULES_DIR") or str(Path.cwd() / "capsules"))
     sub = p.add_subparsers(dest="cmd", required=True)
 
     ini = sub.add_parser("init", help="migrar + seeds estructurales")
@@ -149,11 +150,80 @@ def _parser() -> argparse.ArgumentParser:
     im = sub.add_parser("import-json")
     im.add_argument("path")
     im.add_argument("--mode", choices=["merge", "replace"], default="merge")
+
+    cn = sub.add_parser("capsule-new", help="crear cápsula de tarea <= 1 página (F08)")
+    cn.add_argument("task_id")
+    cn.add_argument("--owner", required=True)
+    cn.add_argument("--estado", required=True)
+    cn.add_argument("--status", default="en_progreso")
+    cn.add_argument("--decision", action="append", default=[])
+    cn.add_argument("--next", action="append", default=[], dest="proximos")
+    cn.add_argument("--pointer", action="append", default=[], help="ruta absoluta[#Lx-Ly][@sha]")
+    cn.add_argument("--collaborator", action="append", default=[])
+    cn.add_argument("--ttl", type=int, default=48)
+    cn.add_argument("--budget", type=int, default=450)
+
+    cs = sub.add_parser("capsule-show", help="leer cápsula + staleness (TTL y sha256 de punteros)")
+    cs.add_argument("task_id")
+    cs.add_argument("--json", action="store_true")
+
+    cpat = sub.add_parser("capsule-patch", help="parche con CAS sobre rev")
+    cpat.add_argument("task_id")
+    cpat.add_argument("--rev", type=int, required=True, help="revisión leída (I-CAS)")
+    cpat.add_argument("--set", action="append", default=[], metavar="CAMPO=VALOR")
+    cpat.add_argument("--add", action="append", default=[], metavar="CAMPO=VALOR")
+    cpat.add_argument("--remove", action="append", default=[], metavar="CAMPO=INDICE")
+    cpat.add_argument("--ops", help="lista JSON de operaciones")
+
+    sub.add_parser("capsule-list")
     return p
+
+
+def _kv(items: list[str], op: str) -> list[dict[str, object]]:
+    out: list[dict[str, object]] = []
+    for it in items:
+        k, sep, v = it.partition("=")
+        if not sep:
+            raise DomainError(f"usar CAMPO=VALOR: {it!r}")
+        out.append({"op": op, "field": k, "index": int(v)} if op == "remove" else {"op": op, "field": k, "value": v})
+    return out
+
+
+def _capsules(a: argparse.Namespace) -> int:
+    from .adapters.capsule_fs import FsCapsuleStore
+    from .adapters.hasher_fs import FsFileHasher
+    from .adapters.sqlite_repo import UtcClock
+    from .application.capsules import CapsuleService
+
+    svc = CapsuleService(FsCapsuleStore(a.capsules_dir), FsFileHasher(), UtcClock())
+    agent = a.agent or "primary"
+    if a.cmd == "capsule-new":
+        cap = svc.new(a.task_id, a.owner, a.estado, agent, status=a.status, decisiones=a.decision,
+                      proximos=a.proximos, punteros=a.pointer, collaborators=a.collaborator,
+                      ttl_hours=a.ttl, budget_tokens=a.budget)
+        print(dumps(cap.meta()))
+    elif a.cmd == "capsule-show":
+        info = svc.show(a.task_id)
+        print(dumps(info) if a.json else info["text"] + f"<!-- staleness: {json.dumps(info['staleness'])} -->")
+        return 0 if info["staleness"]["ok"] else 4
+    elif a.cmd == "capsule-patch":
+        ops = _kv(a.set, "set") + _kv(a.add, "add") + _kv(a.remove, "remove")
+        if a.ops:
+            ops += json.loads(a.ops)
+        print(dumps(svc.patch(a.task_id, ops, a.rev, agent).meta()))
+    else:
+        print(dumps(svc.list()))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     a = _parser().parse_args(argv)
+    if a.cmd.startswith("capsule-"):
+        try:
+            return _capsules(a)
+        except DomainError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 5 if type(e).__name__ == "ConflictError" else 1
     repo = SqliteMemoryRepository(a.db)
     svc = MemoryService(repo)
     try:
