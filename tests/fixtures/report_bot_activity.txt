@@ -1,0 +1,15 @@
+Plan: Cursor Free. Their included Grok Bot usage comes with SuperGrok.
+Weekly usage limit: 0.6% used.
+The weekly usage limit resets Thursday, Dec 3 at 00:37 their local time (in 6d 15h).
+The weekly usage limit above is for this week only. The report can't show how much of an earlier week's limit was used.
+Grok Bot usage over the last 7 days (Nov 19 – Nov 26, UTC), by bot and activity, as shares of all Grok Bot usage in that period:
+- Ben: 68%
+  - Chats with the user: 66%
+  - Bot-to-Bot: 2%
+- Ben Tween Forge: 31%
+  - Chats with the user: 16%
+  - Bot-to-Bot: 14%
+  - Routines: 1%
+- Federica Fondos: 1%
+  - Chats with the user: 1%
+  - Routines: <1%

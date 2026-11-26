@@ -1,0 +1,19 @@
+Weekly usage limit: 0.7% used.
+Grok Bot usage over the last 7 days (Nov 19 – Nov 26, UTC), by day and bot, as shares of all Grok Bot usage in that period:
+- Thu, Nov 19: 16%
+  - Ben: 15%
+  - Ben Tween Forge: 1%
+- Fri, Nov 20: 5%
+  - Ben: 3%
+  - Ben Tween Forge: 2%
+- Sat, Nov 21: <1%
+  - Ben Tween Forge: <1%
+- Tue, Nov 24: 14%
+  - Ben: 14%
+- Wed, Nov 25: 31%
+  - Ben: 19%
+  - Ben Tween Forge: 12%
+- Thu, Nov 26: 34%
+  - Ben: 18%
+  - Ben Tween Forge: 15%
+  - Federica Fondos: 1%

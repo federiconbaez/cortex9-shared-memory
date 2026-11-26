@@ -1,0 +1,6 @@
+Weekly usage limit: 0.6% used.
+Grok Bot usage over the last 7 days (Nov 19 – Nov 26, UTC), by routine, as shares of all Grok Bot usage in that period:
+- Revision diaria de financiamiento: 1%, about 5 runs a week
+- Frenar MCP forense: <1%, paused
+- Grok Bot's built-in check-ins: <1%
+- Not from a routine: 99%

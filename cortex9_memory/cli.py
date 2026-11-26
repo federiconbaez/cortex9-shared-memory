@@ -22,6 +22,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", default=os.environ.get("C9MEM_AGENT"), help="nombre del agente que escribe")
     p.add_argument("--events-log", default=os.environ.get("C9MEM_EVENTS_LOG") or str(Path.cwd() / "events" / "c9-events.jsonl"))
     p.add_argument("--usage-log", default=os.environ.get("C9MEM_USAGE_LOG") or str(Path.cwd() / "usage" / "usage-log.jsonl"))
+    p.add_argument("--shares-log", default=os.environ.get("C9MEM_SHARES_LOG") or str(Path.cwd() / "usage" / "shares.jsonl"))
     p.add_argument("--capsules-dir", default=os.environ.get("C9MEM_CAPSULES_DIR") or str(Path.cwd() / "capsules"))
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -190,6 +191,10 @@ def _parser() -> argparse.ArgumentParser:
     ur.add_argument("--tokens", type=int)
     ur.add_argument("--source", default="platform")
     sub.add_parser("usage-status", help="nivel 50/75/90 y política vigente")
+    ui = sub.add_parser("usage-ingest", help="guardar un reporte de uso por bot/actividad/día/routine (F39)")
+    ui.add_argument("--file", help="texto del reporte; si se omite, stdin")
+    ui.add_argument("--reset-at", help="ISO-8601; si se pasa, la lectura N%% también alimenta el semáforo")
+    sub.add_parser("usage-burn", help="velocidad de quema y proyección de agotamiento (F39)")
     ua = sub.add_parser("usage-admit", help="¿se puede lanzar esta tarea sin cruzar el techo?")
     ua.add_argument("--kind", choices=["pesada", "liviana", "cierre"], required=True)
     ua.add_argument("--delta", type=float, help="puntos porcentuales estimados")
@@ -313,6 +318,17 @@ def _usage(a: argparse.Namespace) -> int:
     from .domain.scoring import parse_iso
 
     svc = BudgetService(JsonlFileLog(a.usage_log), UtcClock())
+    if a.cmd in ("usage-ingest", "usage-burn"):
+        from .application.usage_ledger import LedgerService
+
+        led = LedgerService(JsonlFileLog(a.shares_log), svc, UtcClock())
+        if a.cmd == "usage-burn":
+            print(dumps(led.burn()))
+            return 0
+        text = Path(a.file).read_text(encoding="utf-8") if a.file else sys.stdin.read()
+        reset = parse_iso(a.reset_at).isoformat().replace("+00:00", "Z") if a.reset_at else None
+        print(dumps(led.ingest(text, a.agent or "primary", reset)))
+        return 0
     if a.cmd == "usage-record":
         reset = parse_iso(a.reset_at).isoformat().replace("+00:00", "Z")
         st = svc.record(a.pct, reset, a.agent or "primary", task_id=a.task, phase=a.phase, tokens_est=a.tokens,
